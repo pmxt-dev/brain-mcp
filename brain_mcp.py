@@ -1,61 +1,69 @@
 import os
-import git
 import sys
+import base64
+import httpx
 from mcp.server.fastmcp import FastMCP
 
-# Path to the brain repo
-BRAIN_REPO_PATH = os.environ.get("BRAIN_REPO_PATH", "/opt/data/repos/company-brain")
+# Config from Env
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
+BRAIN_REPO = os.environ.get("BRAIN_REPO", "pmxt-dev/company-brain")
 
 mcp = FastMCP("Company Brain")
 
-def get_repo():
-    if not os.path.exists(BRAIN_REPO_PATH):
-        raise Exception(f"Brain repo not found at {BRAIN_REPO_PATH}. Set BRAIN_REPO_PATH env var.")
-    return git.Repo(BRAIN_REPO_PATH)
+def get_headers():
+    if not GITHUB_TOKEN:
+        raise Exception("GITHUB_TOKEN not found in environment.")
+    return {
+        "Authorization": f"Bearer {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github.v3+json"
+    }
 
 @mcp.tool()
-def list_knowledge(directory: str = "docs") -> str:
-    """List knowledge files in the company brain."""
-    results = []
-    full_path = os.path.join(BRAIN_REPO_PATH, directory)
-    if not os.path.exists(full_path):
-        return f"Error: Directory {directory} not found."
-    for root, _, files in os.walk(full_path):
-        for file in files:
-            if file.endswith(".md"):
-                results.append(os.path.relpath(os.path.join(root, file), BRAIN_REPO_PATH))
-    return "\n".join(results)
+def list_knowledge(path: str = "docs") -> str:
+    """List all knowledge files in the company brain via GitHub API."""
+    url = f"https://api.github.com/repos/{BRAIN_REPO}/contents/{path}"
+    with httpx.Client() as client:
+        resp = client.get(url, headers=get_headers())
+        resp.raise_for_status()
+        items = resp.json()
+        return "\n".join([item["path"] for item in items if item["type"] == "file" or item["type"] == "dir"])
 
 @mcp.tool()
 def read_knowledge(file_path: str) -> str:
-    """Read a specific knowledge file from the brain."""
-    full_path = os.path.join(BRAIN_REPO_PATH, file_path)
-    with open(full_path, "r") as f:
-        return f.read()
-
-@mcp.tool()
-def search_knowledge(query: str) -> str:
-    """Search for a keyword across the brain docs."""
-    repo = get_repo()
-    try:
-        results = repo.git.grep("-l", query, "--", "docs")
-        return results
-    except:
-        return "No matches found."
+    """Read a specific knowledge file from the company brain via GitHub."""
+    url = f"https://api.github.com/repos/{BRAIN_REPO}/contents/{file_path}"
+    with httpx.Client() as client:
+        resp = client.get(url, headers=get_headers())
+        resp.raise_for_status()
+        data = resp.json()
+        content = base64.b64decode(data["content"]).decode("utf-8")
+        return content
 
 @mcp.tool()
 def write_to_brain(file_path: str, content: str, commit_message: str) -> str:
-    """Pull, write, commit, and push an update to the brain."""
-    repo = get_repo()
-    repo.remotes.origin.pull()
-    full_path = os.path.join(BRAIN_REPO_PATH, file_path)
-    os.makedirs(os.path.dirname(full_path), exist_ok=True)
-    with open(full_path, "w") as f:
-        f.write(content)
-    repo.index.add([file_path])
-    repo.index.commit(commit_message)
-    repo.remote().push()
-    return f"Pushed update to {file_path}"
+    """Update or create a file in the company brain using the GitHub API."""
+    url = f"https://api.github.com/repos/{BRAIN_REPO}/contents/{file_path}"
+    headers = get_headers()
+    
+    with httpx.Client() as client:
+        # 1. Get current file (for SHA if it exists)
+        resp = client.get(url, headers=headers)
+        sha = None
+        if resp.status_code == 200:
+            sha = resp.json()["sha"]
+        
+        # 2. Push update
+        payload = {
+            "message": commit_message,
+            "content": base64.b64encode(content.encode("utf-8")).decode("utf-8")
+        }
+        if sha:
+            payload["sha"] = sha
+            
+        put_resp = client.put(url, headers=headers, json=payload)
+        put_resp.raise_for_status()
+        
+    return f"Successfully pushed {file_path} to GitHub."
 
 def main():
     mcp.run(transport="stdio")
