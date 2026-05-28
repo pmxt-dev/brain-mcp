@@ -8,7 +8,16 @@ from mcp.server.fastmcp import FastMCP
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
 BRAIN_REPO = os.environ.get("BRAIN_REPO", "pmxt-dev/company-brain")
 
-mcp = FastMCP("Company Brain")
+mcp = FastMCP(
+    "Company Brain",
+    instructions=(
+        "Knowledge base for PMXT. When writing architecture, decision, or project "
+        "docs via write_to_brain, include an ASCII diagram for any flow, system, or "
+        "sequence with more than ~3 moving parts: boxes for components, arrows for "
+        "data/fund flow, numbered steps, and a 'START HERE' marker on build plans. "
+        "Keep diagrams in fenced code blocks. Never leave a multi-actor flow in prose only."
+    ),
+)
 
 def get_headers():
     if not GITHUB_TOKEN:
